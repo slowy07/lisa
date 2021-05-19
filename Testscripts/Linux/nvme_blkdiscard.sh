@@ -53,10 +53,12 @@ Run_Blkdiscard() {
             LogMsg "Unmounted ${namespace}"
         fi
         # Run blkdiscard on partition
-        if [ "${DISTRO_NAME}" = "ubuntu" ] && [ ${DISTRO_VERSION} = "20.10" ]; then
+        blkdiscard -v "/dev/${namespace}p1"
+        # On ubuntu 20.04 and ubuntu 21.04 see below error message:
+        # blkdiscard: /dev/nvme0n1p1 contains existing file system (xfs).
+        # blkdiscard: This is destructive operation, data will be lost! Use the -f option to override.
+        if [ $? -ne 1 ]; then
             blkdiscard -f -v "/dev/${namespace}p1"
-        else
-            blkdiscard -v "/dev/${namespace}p1"
         fi
         if [ $? -ne 0 ]; then
             LogErr "Failed to run blkdiscard on ${namespace}"
