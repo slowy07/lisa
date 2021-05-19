@@ -174,7 +174,7 @@ Config_Rhel() {
     elif [ "$os_GENERATION" -eq 1 ] && [[ $os_RELEASE =~ 8.* ]]; then
         boot_filepath=/boot/grub2/grubenv
     elif [ "$os_GENERATION" -eq 2 ] && [[ $os_RELEASE =~ 7.* || $os_RELEASE =~ 8.* ]]; then
-        boot_filepath=/boot/efi/EFI/$distro/grub.cfg
+        boot_filepath=/boot/grub2/grubenv
     else
         boot_filepath=$(find /boot -name grub.cfg)
     fi
@@ -354,6 +354,7 @@ if [[ $DISTRO != "redhat_8" ]] && [[ $DISTRO != "centos_8" ]]; then
 else
     sed -i --follow-symlinks "/kernelopts=root/s/$/ crashkernel=$crashkernel/" $boot_filepath
 fi
+
 if [ $? -ne 0 ]; then
     LogErr "Could not set the new crashkernel value in $boot_filepath"
     SetTestStateAborted
