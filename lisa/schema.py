@@ -180,6 +180,33 @@ class TypedSchema:
 
 @dataclass_json(undefined=Undefined.INCLUDE)
 @dataclass
+class Transformer(TypedSchema):
+    type: str = field(metadata=metadata(required=True))
+
+    # the name can be referenced by other transformers. If it's not specified,
+    # the type will be used.
+    name: str = ""
+    # prefix of generated variables. if it's not specified, the name will be
+    # used. For example, a variable called "a" with the prefix "b", so the
+    # variable name will be "b_a" in the variable dict
+    prefix: str = ""
+
+    # specify which transformers are depended.
+    depends_on: List[str] = field(default_factory=list)
+    # rename some of variables for easier use.
+    rename: Dict[str, str] = field(default_factory=dict)
+
+    delay_parsed: CatchAll = field(default_factory=dict)  # type: ignore
+
+    def __post_init__(self, *args: Any, **kwargs: Any) -> None:
+        if not self.name:
+            self.name = self.type
+        if not self.prefix:
+            self.prefix = self.name
+
+
+@dataclass_json(undefined=Undefined.INCLUDE)
+@dataclass
 class Combinator(TypedSchema):
     type: str = field(
         default=constants.COMBINATOR_GRID, metadata=metadata(required=True)
@@ -311,27 +338,6 @@ class Variable:
             self.value = self.value_raw
 
 
-@dataclass_json()
-@dataclass
-class ArtifactLocation(TypedSchema):
-    type: str = field(
-        default="",
-        metadata=metadata(required=True, validate=validate.OneOf([])),
-    )
-    path: str = field(default="", metadata=metadata(required=True))
-
-    def __post_init__(self, *args: Any, **kwargs: Any) -> None:
-        add_secret(self.path)
-
-
-@dataclass_json()
-@dataclass
-class Artifact(TypedSchema):
-    # name is optional. artifacts can be referred by name or index.
-    name: str = ""
-    locations: List[ArtifactLocation] = field(default_factory=list)
-
-
 @dataclass_json(undefined=Undefined.INCLUDE)
 @dataclass
 class Notifier(TypedSchema):
@@ -355,8 +361,6 @@ class NodeSpace(search_space.RequirementMixin, TypedSchema, ExtendableSchemaMixi
     )
     name: str = ""
     is_default: bool = field(default=False)
-    # optional, if there is only one artifact.
-    artifact: str = field(default="")
     node_count: search_space.CountSpace = field(
         default=search_space.IntRange(min=1),
         metadata=metadata(decoder=search_space.decode_count_space),
@@ -426,7 +430,7 @@ class NodeSpace(search_space.RequirementMixin, TypedSchema, ExtendableSchemaMixi
         """
         return (
             f"type:{self.type},name:{self.name},"
-            f"default:{self.is_default},artifact:{self.artifact},"
+            f"default:{self.is_default},"
             f"count:{self.node_count},core:{self.core_count},"
             f"mem:{self.memory_mb},disk:{self.disk_count},"
             f"nic:{self.nic_count},gpu:{self.gpu_count},"
@@ -696,7 +700,7 @@ class Platform(TypedSchema, ExtendableSchemaMixin):
     keep_environment: Optional[Union[str, bool]] = False
 
     # platform can specify a default environment requirement
-    requirement: Optional[Capability] = None
+    requirement: Optional[Dict[str, Any]] = None
 
     def __post_init__(self, *args: Any, **kwargs: Any) -> None:
         add_secret(self.admin_username, PATTERN_HEADTAIL)
@@ -719,6 +723,13 @@ class Platform(TypedSchema, ExtendableSchemaMixin):
                 raise LisaException(
                     f"keep_environment only can be set as one of {allow_list}"
                 )
+
+        # this requirement in platform will be applied to each test case
+        # requirement. It means the set value will override value in test cases.
+        # But the schema will be validated here. The original NodeSpace object holds
+        if self.requirement:
+            # validate schema of raw inputs
+            Capability.schema().load(self.requirement)  # type: ignore
 
 
 @dataclass_json()
@@ -850,8 +861,8 @@ class Runbook:
     parent: Optional[List[Parent]] = field(default=None)
     extension: Optional[List[Union[str, Extension]]] = field(default=None)
     variable: Optional[List[Variable]] = field(default=None)
+    transformer: Optional[List[Transformer]] = field(default=None)
     combinator: Optional[Combinator] = field(default=None)
-    artifact: Optional[List[Artifact]] = field(default=None)
     environment: Optional[EnvironmentRoot] = field(default=None)
     notifier: Optional[List[Notifier]] = field(default=None)
     platform: List[Platform] = field(default_factory=list)

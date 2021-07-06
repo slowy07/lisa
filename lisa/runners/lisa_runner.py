@@ -22,7 +22,7 @@ from lisa.platform_ import (
 from lisa.runner import BaseRunner
 from lisa.testselector import select_testcases
 from lisa.testsuite import TestCaseRequirement, TestResult, TestStatus, TestSuite
-from lisa.util import LisaException, constants
+from lisa.util import LisaException, constants, deep_update_dict
 from lisa.util.parallel import check_cancelled
 from lisa.variable import VariableEntry
 
@@ -74,7 +74,8 @@ class LisaRunner(BaseRunner):
 
         # sort environments by status
         available_environments = self._sort_environments(self.environments)
-        available_results = self._get_runnable_test_results(self.test_results)
+        available_results = [x for x in self.test_results if x.can_run]
+        self._sort_test_results(available_results)
 
         # check deleteable environments
         delete_task = self._delete_unused_environments()
@@ -119,8 +120,9 @@ class LisaRunner(BaseRunner):
         return None
 
     def close(self) -> None:
-        for environment in self.environments:
-            self._delete_environment_task(environment, [])
+        if hasattr(self, "environments") and self.environments:
+            for environment in self.environments:
+                self._delete_environment_task(environment, [])
         super().close()
 
     def _associate_environment_test_results(
@@ -437,7 +439,7 @@ class LisaRunner(BaseRunner):
         results = [
             x
             for x in test_results
-            if x.can_run
+            if x.is_queued
             and (
                 use_new_environment is None
                 or x.runtime_data.use_new_environment == use_new_environment
@@ -554,13 +556,12 @@ class LisaRunner(BaseRunner):
         platform_type_set = search_space.SetSpace[str](
             is_allow_set=True, items=[platform_type]
         )
+
+        platform_requirement_data: Optional[Dict[str, Any]] = None
         if hasattr(self, "platform"):
-            platform_requirement = cast(
+            platform_requirement_data = cast(
                 schema.Platform, self.platform.runbook
             ).requirement
-        else:
-            # For compatibility with UT, some UTs has no platform.
-            platform_requirement = None
         for test_result in test_results:
             test_req: TestCaseRequirement = test_result.runtime_data.requirement
 
@@ -576,10 +577,22 @@ class LisaRunner(BaseRunner):
                 environment_requirement = copy.copy(test_req.environment)
                 # if platform defined requirement, replace the requirement from
                 # test case.
-                if platform_requirement:
-                    environment_requirement.nodes = [platform_requirement] * len(
-                        test_req.environment.nodes
-                    )
+                if platform_requirement_data:
+                    for index, node_requirement in enumerate(
+                        environment_requirement.nodes
+                    ):
+                        node_requirement_data: Dict[
+                            str, Any
+                        ] = node_requirement.to_dict()  # type: ignore
+                        node_requirement_data = deep_update_dict(
+                            platform_requirement_data, node_requirement_data
+                        )
+                        node_requirement = (
+                            schema.NodeSpace.schema().load(  # type: ignore
+                                node_requirement_data
+                            )
+                        )
+                        environment_requirement.nodes[index] = node_requirement
 
                 # if case need a new env to run, force to create one.
                 # if not, get or create one.

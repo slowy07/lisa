@@ -1,11 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
+import copy
 from logging import FileHandler
 from threading import Lock
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
-from lisa import notifier, schema
+from lisa import notifier, schema, transformer
 from lisa.action import Action
 from lisa.combinator import Combinator
 from lisa.parameter_parser.runbook import RunbookBuilder
@@ -14,7 +15,7 @@ from lisa.util import BaseClassMixin, InitializableMixin, constants
 from lisa.util.logger import create_file_handler, get_logger, remove_handler
 from lisa.util.parallel import TaskManager, cancel, set_global_task_manager
 from lisa.util.subclasses import Factory
-from lisa.variable import VariableEntry, get_case_variables
+from lisa.variable import VariableEntry, get_case_variables, replace_variables
 
 
 def parse_testcase_filters(raw_filters: List[Any]) -> List[schema.BaseTestCaseFilter]:
@@ -50,6 +51,9 @@ class BaseRunner(BaseClassMixin, InitializableMixin):
         self._log_handler: Optional[FileHandler] = None
         self._case_variables = case_variables
         self.canceled = False
+
+    def __repr__(self) -> str:
+        return self.id
 
     @property
     def is_done(self) -> bool:
@@ -91,10 +95,8 @@ class RootRunner(Action):
         self.exit_code: int = 0
 
         self._runbook_builder = runbook_builder
-        self._runbook = runbook_builder.runbook
-        self._max_concurrency = self._runbook.concurrency
+
         self._log = get_logger("RootRunner")
-        self._log.debug(f"max concurrency is {self._max_concurrency}")
         self._runners: List[BaseRunner] = []
         self._results: List[TestResult] = []
         self._results_lock: Lock = Lock()
@@ -103,6 +105,19 @@ class RootRunner(Action):
         await super().start()
 
         try:
+            transformer.run(self._runbook_builder)
+
+            # update runbook for notifiers
+            raw_data = copy.deepcopy(self._runbook_builder.raw_data)
+            constants.RUNBOOK = replace_variables(
+                raw_data, self._runbook_builder._variables
+            )
+            runbook = self._runbook_builder.resolve()
+            self._runbook_builder.dump_variables()
+
+            self._max_concurrency = runbook.concurrency
+            self._log.debug(f"max concurrency is {self._max_concurrency}")
+
             self._start_loop()
         except Exception as identifer:
             cancel()
@@ -124,7 +139,7 @@ class RootRunner(Action):
         await super().close()
 
     def _fetch_runners(self) -> Iterator[BaseRunner]:
-        root_runbook = self._runbook_builder.runbook
+        root_runbook = self._runbook_builder.resolve(self._runbook_builder.variables)
 
         if root_runbook.combinator:
             combinator_factory = Factory[Combinator](Combinator)
@@ -190,7 +205,7 @@ class RootRunner(Action):
 
     def _output_results(self, test_results: List[TestResult]) -> None:
         self._log.info("________________________________________")
-        result_count_dict: Dict[TestStatus, int] = dict()
+        result_count_dict: Dict[TestStatus, int] = {}
         for test_result in test_results:
             self._log.info(
                 f"{test_result.runtime_data.metadata.full_name:>50}: "

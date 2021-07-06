@@ -56,7 +56,15 @@ class OperatingSystem:
     __os_release_pattern_name = re.compile(
         r"^NAME=\"?([^\" \r\n]+)[^\" \n]*\"?\r?$", re.M
     )
+    # For example, the ID and ID_LIKE in /etc/os-release of AlmaLinux is:
+    # ID="almalinux"
+    # ID_LIKE="rhel centos fedora"
+    # The __os_release_pattern_id can match "almalinux"
+    # The __os_release_pattern_idlike can match "rhel"
     __os_release_pattern_id = re.compile(r"^ID=\"?([^\" \r\n]+)[^\" \n]*\"?\r?$", re.M)
+    __os_release_pattern_idlike = re.compile(
+        r"^ID_LIKE=\"?([^\" \r\n]+)[^\"\n]*\"?\r?$", re.M
+    )
     __redhat_release_pattern_header = re.compile(r"^([^ ]*) .*$")
     __debian_issue_pattern = re.compile(r"^([^ ]+) ?.*$")
     __release_pattern = re.compile(r"^DISTRIB_ID='?([^ \n']+).*$", re.M)
@@ -142,6 +150,7 @@ class OperatingSystem:
         cmd_result = typed_node.execute(cmd="cat /etc/os-release", no_error_log=True)
         yield get_matched_str(cmd_result.stdout, cls.__os_release_pattern_name)
         yield get_matched_str(cmd_result.stdout, cls.__os_release_pattern_id)
+        cmd_result_os_release = cmd_result
 
         # for RedHat, CentOS 6.x
         cmd_result = typed_node.execute(
@@ -170,6 +179,11 @@ class OperatingSystem:
         # try best for some suse derives, like netiq
         cmd_result = typed_node.execute(cmd="cat /etc/SuSE-release", no_error_log=True)
         yield get_matched_str(cmd_result.stdout, cls.__suse_release_pattern)
+
+        # try best from distros'family through ID_LIKE
+        yield get_matched_str(
+            cmd_result_os_release.stdout, cls.__os_release_pattern_idlike
+        )
 
     def _get_os_version(self) -> OsVersion:
         raise NotImplementedError
@@ -521,19 +535,15 @@ class Fedora(Linux):
             no_error_log=True,
         )
         if cmd_result.exit_code == 0 and cmd_result.stdout != "":
-            for vendor in ["Fedora", "CentOS", "Red Hat", "XenServer"]:
-                if vendor not in cmd_result.stdout:
-                    continue
-                os_version.vendor = vendor
-                os_version.release = get_matched_str(
-                    cmd_result.stdout, self._fedora_release_pattern_version
-                )
-                os_version.codename = get_matched_str(
-                    cmd_result.stdout, self.__distro_codename_pattern
-                )
-                break
-            if os_version.vendor == "":
+            if "Fedora" not in cmd_result.stdout:
                 raise LisaException("OS version information not found")
+            os_version.vendor = "Fedora"
+            os_version.release = get_matched_str(
+                cmd_result.stdout, self._fedora_release_pattern_version
+            )
+            os_version.codename = get_matched_str(
+                cmd_result.stdout, self.__distro_codename_pattern
+            )
         else:
             raise LisaException(
                 "Error in running command 'cat /etc/fedora-release'"
@@ -551,7 +561,7 @@ class Redhat(Fedora):
 
     @classmethod
     def name_pattern(cls) -> Pattern[str]:
-        return re.compile("^rhel|Red|Scientific|acronis|Actifio$")
+        return re.compile("^rhel|Red|AlmaLinux|Scientific|acronis|Actifio$")
 
     def _initialize_package_installation(self) -> None:
         # older images cost much longer time when update packages
@@ -606,7 +616,7 @@ class Redhat(Fedora):
             cmd="cat /etc/redhat-release", no_error_log=True
         )
         if cmd_result.exit_code == 0 and cmd_result.stdout != "":
-            for vendor in ["Red Hat", "CentOS", "XenServer"]:
+            for vendor in ["Red Hat", "CentOS", "XenServer", "AlmaLinux"]:
                 if vendor not in cmd_result.stdout:
                     continue
                 os_version.vendor = vendor

@@ -128,7 +128,7 @@ def fields_to_dict(src: Any, fields: Iterable[str]) -> Dict[str, Any]:
     assert src
     assert fields
 
-    result: Dict[str, Any] = dict()
+    result: Dict[str, Any] = {}
     for field in fields:
         value = getattr(src, field)
         if value is not None:
@@ -147,13 +147,13 @@ def set_filtered_fields(src: Any, dest: Any, fields: List[str]) -> None:
         if hasattr(src, field_name):
             field_value = getattr(src, field_name)
         else:
-            raise LisaException(f"field {field_name} doesn't exist on src")
+            raise LisaException(f"field '{field_name}' doesn't exist on src")
         if field_value is not None:
             setattr(dest, field_name, field_value)
 
 
 def find_patterns_in_lines(lines: str, patterns: List[Pattern[str]]) -> List[List[str]]:
-    results: List[List[str]] = [list()] * len(patterns)
+    results: List[List[str]] = [[]] * len(patterns)
     for line in lines.splitlines(keepends=False):
         for index, pattern in enumerate(patterns):
             if not results[index]:
@@ -170,4 +170,15 @@ def get_matched_str(
         if matched_item:
             # if something matched, it's like ['matched']
             result = matched_item[0 if first_match else -1]
+    return result
+
+
+def deep_update_dict(src: Dict[str, Any], dest: Dict[str, Any]) -> Dict[str, Any]:
+    result = dest.copy()
+
+    for key, value in src.items():
+        if isinstance(value, dict) and key in dest:
+            value = deep_update_dict(value, dest[key])
+        result[key] = value
+
     return result
