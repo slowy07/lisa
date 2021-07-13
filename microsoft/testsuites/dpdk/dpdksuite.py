@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT license.
 
-from pathlib import Path
+from pathlib import PurePath
 
 from assertpy import assert_that
 
@@ -20,7 +20,6 @@ from lisa.tools import Git
     """,
 )
 class dpdk(TestSuite):
-
     @TestCaseMetadata(
         description="""
             This test case checks DPDK can be built and installed correctly.
@@ -41,6 +40,7 @@ class dpdk(TestSuite):
         self._hugepages_init(node)
         self._hugepages_enable(node)
         self._install_dpdk(node)
+        self._execute_expect_zero(node, "/usr/local/bin/dpdk-testpmd --version")
 
     _ubuntu_packages = [
         "librdmacm-dev",
@@ -63,42 +63,105 @@ class dpdk(TestSuite):
         "python3-pyelftools",
         "python-pyelftools",
     ]
-
+    _redhat_packages = [
+        "gcc",
+        "make",
+        "git",
+        "tar",
+        "wget",
+        "dos2unix",
+        "psmisc",
+        "kernel-devel",
+        "numactl-devel.x86_64",
+        "librdmacm-devel",
+        "pkgconfig",
+        "libmnl-devel",
+        "elfutils-libelf-devel",
+        "python3-pip",
+    ]
+    _rte_target = "x86_64-native-linuxapp-gcc"
     _dpdk_github = "https://github.com/DPDK/dpdk.git"
+    _ninja_url = (
+        "https://github.com/ninja-build/ninja/releases/download/v1.10.2/ninja-linux.zip"
+    )
 
     def _install_dpdk_dependencies(self, node: Node) -> None:
         if isinstance(node.os, Ubuntu):
-            node.os.install_packages(self._ubuntu_packages)
+            for package in self._ubuntu_packages:
+                node.os.install_packages(package)
             self.log.info("Packages installed for Ubunutu")
+            self._execute_expect_zero(node, "pip3 install --upgrade meson")
+            self._execute_expect_zero(node, "mv /usr/bin/meson /usr/bin/meson.bak")
+            self._execute_expect_zero(node, "ln -s /usr/local/bin/meson /usr/bin/meson")
+            self._execute_expect_zero(node, "pip3 install --upgrade ninja")
+
         elif isinstance(node.os, Redhat) or isinstance(node.os, CentOs):
+            self._execute_expect_zero(
+                node, "yum update -y --disablerepo='*' --enablerepo='*microsoft*'"
+            )
             node.os.install_packages(
                 ["groupinstall", "'Infiniband Support'"], signed=False
             )  # todo gross hack to support groupinstall
+            for package in self._redhat_packages:
+                node.os.install_packages(package)
             result = node.execute(
                 "dracut --add-drivers 'mlx4_en mlx4_ib mlx5_ib' -f"
             )  # add mellanox drivers
             self.log.debug("\n".join([result.stdout, result.stderr]))
+            self._execute_expect_zero(node, "systemctl enable rdma")
+            self._execute_expect_zero(node, "pip3 install --upgrade meson")
+            self._execute_expect_zero(node, "ln -s /usr/local/bin/meson /usr/bin/meson")
+
+            self._execute_expect_zero(
+                node,
+                f"wget {self._ninja_url}",
+            )
+            self._execute_expect_zero(
+                node, "unzip ninja-linux.zip && mv ninja /usr/bin/ninja"
+            )
+            self._execute_expect_zero(node, "pip3 install --upgrade pyelftools")
+
+    def _execute_expect_zero_with_path(
+        self, node: Node, cmd: str, path: PurePath
+    ) -> None:
+        result = node.execute(cmd, sudo=True, cwd=path, shell=True)
+        self.log.info(result.stdout)  # TODO: debug
+        assert_that(result.exit_code).described_as(
+            f"{cmd} failed with code {result.exit_code} and stdout+stderr:"
+            + f"\n{result.stdout}\n=============\n{result.stderr}\n=============\n"
+        ).is_zero()
 
     def _execute_expect_zero(self, node: Node, cmd: str) -> None:
-        result = node.execute(cmd, sudo=True)
-        assert_that(result.exit_code).is_zero().described_as(
-            f"{cmd} failed with code {result.exit_code} and stdout+stderr:" +
-            f"\n{result.stdout}\n=============\n{result.stderr}\n=============\n"
-        )
+        self._execute_expect_zero_with_path(node, cmd, node.working_path)
 
     def _hugepages_init(self, node: Node) -> None:
         self._execute_expect_zero(node, "mkdir -p /mnt/huge")
         self._execute_expect_zero(node, "mkdir -p /mnt/huge-1G")
         self._execute_expect_zero(node, "mount -t hugetlbfs nodev /mnt/huge")
-        self._execute_expect_zero(node, "mount -t hugetlbfs nodev /mnt/huge-1G -o 'pagesize=1G'")
+        self._execute_expect_zero(
+            node, "mount -t hugetlbfs nodev /mnt/huge-1G -o 'pagesize=1G'"
+        )
 
     def _hugepages_enable(self, node: Node) -> None:
-        self._execute_expect_zero(node, "echo 4096 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages")
-        self._execute_expect_zero(node, "echo 1 > /sys/devices/system/node/node0/hugepages/hugepages-1048576kB/nr_hugepages")
+        self._execute_expect_zero(
+            node,
+            "echo 4096 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages",
+        )
+        self._execute_expect_zero(
+            node,
+            "echo 1 > /sys/devices/system/node/node0/hugepages/hugepages-1048576kB/nr_hugepages",
+        )
         result = node.execute("grep -i huge /proc/meminfo && ls /mnt/", shell=True)
         self.log.info(f"hugepages status \n{result.stdout}")
 
     def _install_dpdk(self, node: Node) -> None:
         git_tool = node.tools[Git]
         git_tool.clone(self._dpdk_github, cwd=node.working_path)
-        self.log.info(node.execute("ls -la", cwd=node.working_path).stdout)
+        dpdk_path = node.working_path.joinpath("dpdk")
+        self._execute_expect_zero_with_path(node, "meson build", dpdk_path)
+        self.log.info(node.execute("ls -la", cwd=dpdk_path).stdout)
+        dpdk_build_path = dpdk_path.joinpath("build")
+        self._execute_expect_zero_with_path(node, "which ninja", dpdk_build_path)
+        self._execute_expect_zero_with_path(node, "ninja", dpdk_build_path)
+        self._execute_expect_zero_with_path(node, "ninja install", dpdk_build_path)
+        self._execute_expect_zero_with_path(node, "ldconfig", dpdk_build_path)
