@@ -18,8 +18,21 @@ sudo rm -rf state.txt
 . utils.sh || {
     echo "Error: unable to source utils.sh!"
     echo "TestAborted" > state.txt
-    exit 1
+    exit 0
 }
+
+GetDistro
+if [[ "$DISTRO" =~ "ubuntu" ]]; then
+    . /etc/lsb-release
+    if [[ ! "$DISTRIB_RELEASE" == "18.04" ]]; then
+        echo "$DISTRO $DISTRIB_RELEASE is unsupported"
+        SetTestStateSkipped
+        exit 0
+    fi
+else
+    SetTestStateSkipped
+    exit 0
+fi
 
 UtilsInit
 SetTestStateRunning
@@ -32,7 +45,7 @@ echo "----- Checking sgx driver -----"
 if ! modinfo intel_sgx; then
     echo "modinfo intel_sgx failed"
     SetTestStateFailed
-    exit 1
+    exit 0
 fi
 
 function install_prereq_1804() {
@@ -102,15 +115,8 @@ install_azure_dcap_client() {
     popd
 }
 
-. /etc/lsb-release
 echo "Script running on $DISTRIB_DESCRIPTION"
-
-if [ "$DISTRIB_RELEASE" = "18.04" ]; then
-    install_prereq_1804
-else
-    echo "$DISTRIB_RELEASE is unsupported"
-    exit 1
-fi
+install_prereq_1804
 
 export AZDCAP_COLLATERAL_VERSION=v3
 export AZDCAP_DEBUG_LOG_LEVEL=INFO
@@ -130,7 +136,7 @@ for DIR in $SAMPLES; do
 done
 if [ $NUM_PASS -ne "$(wc -w <<< $SAMPLES)" ]; then
     SetTestStateFailed
-    exit 1
+    exit 0
 fi
 
 echo "----- Running FS/GS Enabled Test -----"
@@ -169,7 +175,7 @@ EOF
 gcc -o test-fsgs-enabled ./main.c
 if [[ "$(./test-fsgs-enabled)" != "SUCCESS" ]]; then
     SetTestStateFailed
-    exit 1
+    exit 0
 fi
 
 SetTestStateCompleted
