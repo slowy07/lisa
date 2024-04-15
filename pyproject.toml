@@ -62,7 +62,7 @@ azure = [
 ]
 
 black = [
-    "black ~= 23.1.0",
+    "black ~= 24.4.0",
 ]
 
 docs = [
