@@ -102,7 +102,7 @@ baremetal = [
 ]
 
 mypy = [
-    "mypy == 0.942",
+    "mypy == 1.10.1",
 ]
 
 pylint = [
